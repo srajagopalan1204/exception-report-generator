@@ -1,55 +1,78 @@
 import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
 
-def log(message):
-    print(f"[LOG] {message}")
+def log(msg):
+    print(f"[LOG] {msg}")
 
-def read_excel_flexible(filename):
-    combined_data = []
+def compare_tabs(filename):
+    # Step 1: Read all sheets
+    excel = pd.ExcelFile(filename, engine='openpyxl')
+    sheet_names = excel.sheet_names
+    log(f"Sheets found: {sheet_names}")
 
-    try:
-        # Force openpyxl engine for Excel
-        excel_obj = pd.ExcelFile(filename, engine="openpyxl")
-        log(f"Opened file: {filename}")
+    # Step 2: Load baseline (first tab)
+    baseline = pd.read_excel(filename, sheet_name=sheet_names[0], dtype=str)
+    baseline = baseline.fillna("")
+    log(f"Baseline: {sheet_names[0]} with {len(baseline)} rows")
 
-        for sheet in excel_obj.sheet_names:
-            try:
-                df = pd.read_excel(filename, sheet_name=sheet, dtype=str, engine="openpyxl")
-                df = df.fillna("")  # Replace NaN with blanks
-                df["SourceSheet"] = sheet
-                df["SourceFile"] = filename
-                combined_data.append(df)
-                log(f"Processed sheet: {sheet} with {len(df)} rows")
+    # Step 3: Prepare output dataframe
+    output = pd.DataFrame()
 
-            except Exception as e:
-                log(f"Error reading sheet '{sheet}': {e}")
+    # Columns to compare/insert (hardcoded for now)
+    compare_cols = ['A', 'D', 'F']  # compare values
+    insert_cols = ['B', 'E']        # just copy
 
-    except Exception as e:
-        log(f"Error opening file '{filename}': {e}")
+    # Step 4: Process each sheet
+    for sheet in sheet_names:
+        df = pd.read_excel(filename, sheet_name=sheet, dtype=str).fillna("")
+        df['SourceSheet'] = sheet
 
-    if combined_data:
-        return pd.concat(combined_data, ignore_index=True)
-    else:
-        return pd.DataFrame()
+        # Add insert columns (B, E)
+        for col in insert_cols:
+            if col in df.columns:
+                output[col] = df[col]
+
+        # Add compare columns (A, D, F)
+        for col in compare_cols:
+            if col in df.columns:
+                output[f"{col}_{sheet}"] = df[col]
+
+    # Step 5: Save output first (no highlight yet)
+    temp_file = "combined_output.xlsx"
+    output.to_excel(temp_file, index=False, engine='openpyxl')
+
+    # Step 6: Apply yellow highlight where value != baseline
+    wb = load_workbook(temp_file)
+    ws = wb.active
+
+    # Prepare fill style
+    yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+
+    # Find columns to compare (skip B, E)
+    headers = [cell.value for cell in ws[1]]
+
+    # Baseline sheet name
+    baseline_name = sheet_names[0]
+
+    for row in range(2, ws.max_row + 1):
+        for col_idx, header in enumerate(headers, start=1):
+            if "_" in header and baseline_name not in header:
+                base_col = header.split("_")[0] + "_" + baseline_name
+                if base_col in headers:
+                    base_idx = headers.index(base_col) + 1
+                    val = ws.cell(row=row, column=col_idx).value
+                    base_val = ws.cell(row=row, column=base_idx).value
+                    if val != base_val:
+                        ws.cell(row=row, column=col_idx).fill = yellow_fill
+
+    wb.save(temp_file)
+    log(f"Comparison complete. Output saved as {temp_file}")
 
 def main():
-    log("=== Exception Report Generator Started ===")
-    filenames = input("Enter comma-separated Excel file names (e.g., file1.xlsx,file2.xlsx): ")
-    files = [f.strip() for f in filenames.split(",") if f.strip()]
-
-    all_data = []
-    for file in files:
-        df = read_excel_flexible(file)
-        if not df.empty:
-            all_data.append(df)
-
-    if all_data:
-        final_df = pd.concat(all_data, ignore_index=True)
-        output_filename = "combined_output.xlsx"
-        final_df.to_excel(output_filename, index=False, engine="openpyxl")
-        log(f"Output saved as {output_filename} — download from file list.")
-    else:
-        log("No valid data found in provided files.")
-
+    log("=== Compare Tabs Started ===")
+    filename = input("Enter Excel file name (with multiple tabs): ").strip()
+    compare_tabs(filename)
     log("=== Process Complete ===")
 
 if __name__ == "__main__":
